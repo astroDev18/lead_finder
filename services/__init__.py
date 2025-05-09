@@ -11,13 +11,15 @@ def init_services(app):
     dialogflow_client = init_dialogflow_client()
     storage = init_storage()
     
+    # Initialize database service
+    from services.db_helper import get_db_service
+    db_service = get_db_service()
+    
     # Make services available to the application context
-
-
-
     app.config['CAMPAIGN_MANAGER'] = campaign_manager
     app.config['TWILIO_CLIENT'] = twilio_client
     app.config['DIALOGFLOW_CLIENT'] = dialogflow_client
     app.config['STORAGE'] = storage
+    app.config['DB_SERVICE'] = db_service
     
     return app
