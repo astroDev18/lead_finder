@@ -45,7 +45,7 @@ class TTSService:
                 logger.error(f"Error loading fallback TTS model: {e2}")
                 raise
     
-    def generate_audio(self, text, speaker="p266", save_to_file=True):
+    def generate_audio(self, text, speaker="p236", save_to_file=True):
         """
         Generate audio from text
         

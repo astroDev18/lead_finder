@@ -155,138 +155,90 @@ def voice_webhook():
 
 @voice_bp.route('/process-response', methods=['POST'])
 def process_response():
-    """Process response with local TTS for replies"""
-    try:
-        # ...existing code to handle the response...
-        
-        # When sending a response, use the local TTS:
-        if response_message:
-            # Generate audio for the response message
-            response_filename = tts_service.generate_audio(response_message)
-            if response_filename:
-                audio_url = f"{server_base_url}/audio/{response_filename}"
-                response.play(url=audio_url)
-            else:
-                response.say(response_message, voice='Polly.Matthew')
-    except Exception as e:
-        logger.error(f"Error processing response: {e}")
-        
-    """Process the customer's spoken response using Dialogflow"""
+    """Process the user's spoken response using Conversation Manager"""
     try:
         logger.info(f"Process response called with form data: {request.form}")
         
         speech_result = request.form.get('SpeechResult', '')
+        digits = request.form.get('Digits', '')
         call_sid = request.form.get('CallSid')
+        campaign_id = request.args.get('campaign_id')
         
-        logger.info(f"Received speech: {speech_result}")
+        # Use either speech or digits
+        user_input = speech_result or digits
         
-        # Get call state
-        call_state = get_call_state(call_sid)
-        if not call_state:
-            logger.error(f"Call state not found for {call_sid}")
-            call_state = {
-                'campaign_id': 'campaign_001',
-                'stage': 'greeting',
-                'responses': []
-            }
+        logger.info(f"Received input from caller: '{user_input}'")
         
-        campaign_id = call_state['campaign_id']
-        script = get_script(campaign_id)
+        # Get database service and TTS service
+        db_service, db = get_db_service()
+        tts_service = get_tts_service()
         
-        # Record response
-        if speech_result:
-            call_state['responses'].append(speech_result)
-            logger.info(f"Caller said: {speech_result}")
-            # Log the speech event
-            log_call_event(call_sid, 'speech_received', {'speech': speech_result})
-        
-        response = VoiceResponse()
-        
-        # Process with Dialogflow if speech detected
-        if speech_result:
-            try:
-                # Get AI response from Dialogflow
-                dialogflow_response = detect_intent(speech_result, call_sid)
-                intent = dialogflow_response['intent']
-                logger.info(f"Detected intent: {intent}, Confidence: {dialogflow_response['intent_confidence']}")
-            except Exception as df_error:
-                logger.error(f"Dialogflow error: {df_error}, using fallback intent detection")
-                # Fallback to basic intent detection
-                intent = "RealEstateInterest" if parse_speech_intent(speech_result) == 'positive' else "RealEstateDecline"
+        try:
+            # Initialize the conversation manager
+            conversation_manager = ConversationManager(db_service)
             
-            # Map Dialogflow intents to responses
-            if intent == "RealEstateInterest" or any(word in speech_result.lower() for word in ['yes', 'have', 'interested', 'sure']):
-                # Positive response - proceed with more info
-                call_state['stage'] = 'more_info'
-                response.say(script['more_info'], 
-                             voice=VOICE_NAME, 
-                             rate=VOICE_RATE)
-                
-                # Set up another gather for the follow-up
-                gather = Gather(
-                    input='speech',
-                    action='/process-followup',
-                    method='POST',
-                    timeout=GATHER_TIMEOUT,
-                    speech_timeout=SPEECH_TIMEOUT,
-                    speech_model='phone_call',
-                    hints='yes,no,interested,not interested'
-                )
-                response.append(gather)
-            elif intent == "RealEstateDecline" or any(word in speech_result.lower() for word in ['no', 'not', 'don\'t']):
-                # Negative response - end call
-                response.say(script['negative_response'], 
-                             voice=VOICE_NAME, 
-                             rate=VOICE_RATE)
-                response.hangup()
-                call_state['stage'] = 'ended'
-            else:
-                # Unclear intent - ask for clarification
-                response.say(script['unclear_response'], 
-                             voice=VOICE_NAME, 
-                             rate=VOICE_RATE)
-                
-                gather = Gather(
-                    input='speech',
-                    action='/process-response',
-                    method='POST',
-                    timeout=GATHER_TIMEOUT,
-                    speech_timeout=SPEECH_TIMEOUT,
-                    speech_model='phone_call',
-                    hints='yes,no'
-                )
-                response.append(gather)
-        else:
-            # No speech detected
-            response.say(script['no_speech'], 
-                         voice=VOICE_NAME, 
-                         rate=VOICE_RATE)
+            # Process the response
+            result = conversation_manager.process_response(call_sid, campaign_id, user_input)
             
-            gather = Gather(
-                input='speech',
-                action='/process-response',
-                method='POST',
-                timeout=GATHER_TIMEOUT,
-                speech_timeout=SPEECH_TIMEOUT,
-                speech_model='phone_call',
-                hints='yes,no'
-            )
-            response.append(gather)
+            # Create TwiML response
+            response = VoiceResponse()
+            
+            # If we have a response message, generate audio for it
+            if result.get('message'):
+                message_filename = tts_service.generate_audio(result['message'], speaker="p273")  # Use preferred voice
+                
+                if message_filename:
+                    # Get server URL
+                    server_base_url = os.environ.get('SERVER_BASE_URL', request.url_root.rstrip('/'))
+                    audio_url = f"{server_base_url}/audio/{message_filename}"
+                    
+                    if result.get('end_call'):
+                        # If we're ending the call, just play the message
+                        response.play(url=audio_url)
+                        response.hangup()
+                    else:
+                        # Otherwise, gather the next response
+                        gather = Gather(
+                            input='speech dtmf',
+                            action=f'/process-response?campaign_id={campaign_id}',
+                            method='POST',
+                            timeout=int(os.environ.get('GATHER_TIMEOUT', 5)),
+                            speech_timeout=int(os.environ.get('SPEECH_TIMEOUT', 3)),
+                            speech_model='phone_call',
+                            hints='yes,no,interested,not interested',
+                            profanity_filter='false',
+                            enhanced='true'
+                        )
+                        gather.play(url=audio_url)
+                        response.append(gather)
+                        
+                        # Add fallback for no response
+                        fallback_message = "I didn't catch your response. If you're interested, please call us back."
+                        fallback_filename = tts_service.generate_audio(fallback_message, speaker="p273")
+                        if fallback_filename:
+                            fallback_url = f"{server_base_url}/audio/{fallback_filename}"
+                            response.play(url=fallback_url)
+                        else:
+                            response.say(fallback_message, voice='Polly.Matthew')
+                else:
+                    # Fall back to Twilio TTS if our TTS fails
+                    response.say(result['message'], voice='Polly.Matthew')
+                    if result.get('end_call'):
+                        response.hangup()
+            
+            logger.info(f"Sending response for call {call_sid}, stage: {result.get('current_stage')}")
+            return Response(str(response), mimetype='text/xml')
         
-        # Save updated state
-        save_call_state(call_sid, call_state)
-        
-        return Response(str(response), mimetype='text/xml')
-
+        finally:
+            if db:
+                db.close()
     except Exception as e:
-        logger.error(f"Error processing response: {e}")
-        # Return a simple response to avoid breaking the call
+        logger.error(f"Error processing response: {e}", exc_info=True)
         response = VoiceResponse()
         response.say("I apologize, but we're experiencing technical difficulties. Please try again later.", 
-                     voice=VOICE_NAME, 
-                     rate=VOICE_RATE)
+                     voice='Polly.Matthew')
+        response.hangup()
         return Response(str(response), mimetype='text/xml')
-
 @voice_bp.route('/audio/<filename>', methods=['GET'])
 def serve_audio(filename):
     """Serve generated audio files"""

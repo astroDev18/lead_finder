@@ -1,16 +1,10 @@
-"""
-Storage service for managing call state and data.
-This is currently an in-memory implementation, but could be replaced with
-a database implementation in production.
-"""
-import logging
+# Add these functions to your existing storage_service.py
+import os
 import json
 from datetime import datetime
-
-# Set up logging
+import logging
 logger = logging.getLogger(__name__)
 
-# In-memory storage for call states (replace with database in production)
 _call_states = {}
 
 def init_storage():
@@ -27,6 +21,32 @@ def init_storage():
     
     return _call_states
 
+def save_call_state_to_disk(call_sid, state):
+    """Save call state to disk for persistence"""
+    storage_dir = os.path.join(os.getcwd(), "conversation_states")
+    os.makedirs(storage_dir, exist_ok=True)
+    
+    file_path = os.path.join(storage_dir, f"{call_sid}.json")
+    with open(file_path, 'w') as f:
+        json.dump(state, f, indent=2)
+    
+    logger.debug(f"Saved state to disk for call {call_sid}")
+    return state
+
+def load_call_state_from_disk(call_sid):
+    """Load call state from disk if exists"""
+    storage_dir = os.path.join(os.getcwd(), "conversation_states")
+    file_path = os.path.join(storage_dir, f"{call_sid}.json")
+    
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            state = json.load(f)
+            logger.debug(f"Loaded state from disk for call {call_sid}")
+            return state
+    
+    return None
+
+# Update your existing save_call_state function
 def save_call_state(call_sid, state):
     """
     Save or update call state
@@ -43,10 +63,18 @@ def save_call_state(call_sid, state):
     # Add timestamp to state
     state['last_updated'] = datetime.now().isoformat()
     
-    # Store state
+    # Store state in memory
     _call_states[call_sid] = state
     
-    logger.debug(f"Saved state for call {call_sid}: {state}")
+    # Also save to disk for persistence
+    storage_dir = os.path.join(os.getcwd(), "conversation_states")
+    os.makedirs(storage_dir, exist_ok=True)
+    
+    file_path = os.path.join(storage_dir, f"{call_sid}.json")
+    with open(file_path, 'w') as f:
+        json.dump(state, f, indent=2)
+    
+    logger.debug(f"Saved state for call {call_sid}")
     
     return state
 
@@ -62,61 +90,28 @@ def get_call_state(call_sid):
     """
     global _call_states
     
+    # Try memory first
     state = _call_states.get(call_sid)
+    
+    # If not in memory, try disk
+    if not state:
+        storage_dir = os.path.join(os.getcwd(), "conversation_states")
+        file_path = os.path.join(storage_dir, f"{call_sid}.json")
+        
+        if os.path.exists(file_path):
+            with open(file_path, 'r') as f:
+                state = json.load(f)
+                _call_states[call_sid] = state
     
     if state:
         logger.debug(f"Retrieved state for call {call_sid}")
     else:
         logger.warning(f"Call state not found for {call_sid}")
+        # Create a new state if not found
+        state = {
+            'conversation_stage': 'greeting',
+            'conversation_data': {},
+            'previous_stages': []
+        }
     
     return state
-
-def delete_call_state(call_sid):
-    """
-    Delete call state
-    
-    Args:
-        call_sid (str): Twilio call SID
-    
-    Returns:
-        bool: True if state was deleted, False otherwise
-    """
-    global _call_states
-    
-    if call_sid in _call_states:
-        del _call_states[call_sid]
-        logger.debug(f"Deleted state for call {call_sid}")
-        return True
-    else:
-        logger.warning(f"Attempted to delete non-existent call state for {call_sid}")
-        return False
-
-def get_all_call_states():
-    """
-    Get all call states
-    
-    Returns:
-        dict: All call states
-    """
-    global _call_states
-    
-    return _call_states
-
-def save_call_data(call_data):
-    """
-    Save call data for analytics/history (placeholder for database implementation)
-    
-    Args:
-        call_data (dict): Call data to save
-    
-    Returns:
-        dict: Saved call data
-    """
-    # In a real implementation, this would save to a database
-    # For now, just log it
-    logger.info(f"Call data saved (placeholder): {call_data}")
-    
-    # Add timestamp
-    call_data['saved_at'] = datetime.now().isoformat()
-    
-    return call_data
