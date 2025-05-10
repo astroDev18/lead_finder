@@ -31,8 +31,6 @@ frozenlist==1.6.0
 multidict==6.4.3
 yarl==1.20.0
 
-# TTS
-TTS==0.22.0
 
-# PyTorch
-torch==2.1.0
+websockets==12.0
+telnyx==0.5.0

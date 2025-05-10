@@ -5,7 +5,7 @@ import os
 from services.twilio_service import get_twilio_client
 from templates.script_templates import get_script
 from utils.helpers import sanitize_phone_number, log_call_event
-from services.storage_service import save_call_state, get_call_state, delete_call_state
+from services.storage_service import save_call_state, get_call_state
 
 # Set up logging
 logger = logging.getLogger(__name__)

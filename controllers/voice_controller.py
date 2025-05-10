@@ -11,6 +11,7 @@ from datetime import datetime
 from utils.helpers import parse_speech_intent, log_call_event
 from config.settings import VOICE_NAME, VOICE_RATE, VOICE_PITCH, SPEECH_TIMEOUT, GATHER_TIMEOUT
 from services.tts_service import get_tts_service
+from services.conversation_manager import ConversationManager
 from flask import send_file
 
 # Set up logging
@@ -69,21 +70,28 @@ def speech_result():
     
     return Response(str(response), mimetype='text/xml')
 
-@voice_bp.route('/voice-webhook', methods=['POST'])
+
+
 @voice_bp.route('/voice-webhook', methods=['POST'])
 def voice_webhook():
-    """Voice webhook with GPU-accelerated TTS"""
+    """Voice webhook that Twilio calls when the call is answered"""
     try:
         logger.info(f"Voice webhook called with args: {request.args}")
         logger.info(f"Voice webhook form data: {request.form}")
-        
+
+        # Add detailed step-by-step logging
+        logger.info("STEP 1: Voice webhook starting")
+
         campaign_id = request.args.get('campaign_id')
         call_sid = request.form.get('CallSid')
         
-        # Get database service and TTS service
+        logger.info(f"STEP 2: Got campaign_id={campaign_id}, call_sid={call_sid}")
+
+        # Get database service
         db_service, db = get_db_service()
-        tts_service = get_tts_service()
         
+        logger.info("STEP 3: Database service initialized")
+
         try:
             # Get the campaign script
             campaign = db_service.get_campaign_by_id(campaign_id)
@@ -91,11 +99,20 @@ def voice_webhook():
             if not campaign:
                 logger.error(f"Campaign not found: {campaign_id}")
                 response = VoiceResponse()
-                response.say("We encountered an issue with your call.")
+                response.say("We encountered an issue with your call. Please contact support.")
                 response.hangup()
                 return Response(str(response), mimetype='text/xml')
 
-            script_template = campaign.script_template if campaign.script_template else {}
+            script = campaign.script_template
+            
+            # Initialize call state
+            call_state = {
+                'conversation_stage': 'greeting',
+                'conversation_data': {},
+                'phone_number': request.form.get('To'),
+                'previous_stages': []
+            }
+            save_call_state(call_sid, call_state)
             
             # Create TwiML response
             response = VoiceResponse()
@@ -108,20 +125,27 @@ def voice_webhook():
                 timeout=int(os.environ.get('GATHER_TIMEOUT', 5)),
                 speech_timeout=int(os.environ.get('SPEECH_TIMEOUT', 3)),
                 speech_model='phone_call',
-                hints=script_template.get('hints', 'yes,no,interested,not interested'),
+                hints='yes,no,interested,not interested',
                 profanity_filter='false',
                 enhanced='true'
             )
             
-            # Get greeting from script template
-            greeting = script_template.get('greeting', "Hello, this is an automated call. Would you be interested in our services?")
+            # Get greeting from script
+            if 'conversation_flow' in script:
+                # New format: structured conversation flow
+                greeting = script['conversation_flow'].get('greeting', {}).get('message', 
+                          "Hello, this is an automated call. Would you be interested in our services?")
+            else:
+                # Legacy format: simple script
+                greeting = script.get('greeting', "Hello, this is an automated call. Would you be interested in our services?")
             
             # Generate audio with local TTS
-            server_base_url = os.environ.get('SERVER_BASE_URL', request.url_root.rstrip('/'))
+            tts_service = get_tts_service()
+            greeting_filename = tts_service.generate_audio(greeting, speaker="p273")  # Use your preferred voice
             
-            # Generate the greeting audio
-            greeting_filename = tts_service.generate_audio(greeting)
             if greeting_filename:
+                # Use the audio endpoint to serve the file
+                server_base_url = os.environ.get('SERVER_BASE_URL', request.url_root.rstrip('/'))
                 audio_url = f"{server_base_url}/audio/{greeting_filename}"
                 gather.play(url=audio_url)
             else:
@@ -131,34 +155,38 @@ def voice_webhook():
             response.append(gather)
             
             # Generate fallback audio
-            fallback_message = script_template.get('fallback', "I didn't catch your response. If you're interested, please call us back.")
-            fallback_filename = tts_service.generate_audio(fallback_message)
+            fallback_message = "I didn't catch your response. Please call us back if you're interested."
+            fallback_filename = tts_service.generate_audio(fallback_message, speaker="p273")
             
             if fallback_filename:
                 audio_url = f"{server_base_url}/audio/{fallback_filename}"
                 response.play(url=audio_url)
             else:
-                # Fallback to Twilio's TTS
                 response.say(fallback_message, voice='Polly.Matthew')
             
             logger.info(f"Sending TwiML greeting response for call {call_sid}")
             return Response(str(response), mimetype='text/xml')
+        
         finally:
             if db:
                 db.close()
+    
     except Exception as e:
         logger.error(f"Error in voice webhook: {e}", exc_info=True)
         response = VoiceResponse()
-        response.say("I apologize, but we're experiencing technical difficulties.")
+        response.say("I apologize, but we're experiencing technical difficulties. Please try again later.")
         return Response(str(response), mimetype='text/xml')
+
 
 
 @voice_bp.route('/process-response', methods=['POST'])
 def process_response():
-    """Process the user's spoken response using Conversation Manager"""
+    """Process the caller's spoken response using the Conversation Manager"""
     try:
         logger.info(f"Process response called with form data: {request.form}")
-        
+        logger.info(f"Process response called with form data: {request.form}")
+        logger.info(f"Process response query parameters: {request.args}")
+
         speech_result = request.form.get('SpeechResult', '')
         digits = request.form.get('Digits', '')
         call_sid = request.form.get('CallSid')
@@ -174,17 +202,29 @@ def process_response():
         tts_service = get_tts_service()
         
         try:
+            # Get the campaign script
+            campaign = db_service.get_campaign_by_id(campaign_id)
+            if not campaign:
+                logger.error(f"Campaign not found: {campaign_id}")
+                response = VoiceResponse()
+                response.say("We encountered an issue with your call.")
+                response.hangup()
+                return Response(str(response), mimetype='text/xml')
+                
+            script = campaign.script_template
+            
             # Initialize the conversation manager
-            conversation_manager = ConversationManager(db_service)
+            conversation_manager = ConversationManager()
             
             # Process the response
-            result = conversation_manager.process_response(call_sid, campaign_id, user_input)
+            result = conversation_manager.process_response(call_sid, script, user_input)
             
             # Create TwiML response
             response = VoiceResponse()
             
             # If we have a response message, generate audio for it
             if result.get('message'):
+                # Generate audio with TTS service
                 message_filename = tts_service.generate_audio(result['message'], speaker="p273")  # Use preferred voice
                 
                 if message_filename:
@@ -221,24 +261,27 @@ def process_response():
                         else:
                             response.say(fallback_message, voice='Polly.Matthew')
                 else:
-                    # Fall back to Twilio TTS if our TTS fails
+                    # Fallback to Twilio TTS if our TTS fails
                     response.say(result['message'], voice='Polly.Matthew')
                     if result.get('end_call'):
                         response.hangup()
             
             logger.info(f"Sending response for call {call_sid}, stage: {result.get('current_stage')}")
             return Response(str(response), mimetype='text/xml')
-        
+            
         finally:
             if db:
                 db.close()
+    
     except Exception as e:
         logger.error(f"Error processing response: {e}", exc_info=True)
         response = VoiceResponse()
-        response.say("I apologize, but we're experiencing technical difficulties. Please try again later.", 
-                     voice='Polly.Matthew')
+        response.say("I apologize, but we're experiencing technical difficulties. Please try again later.")
         response.hangup()
         return Response(str(response), mimetype='text/xml')
+
+
+
 @voice_bp.route('/audio/<filename>', methods=['GET'])
 def serve_audio(filename):
     """Serve generated audio files"""
