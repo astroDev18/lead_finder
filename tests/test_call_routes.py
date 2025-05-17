@@ -2,6 +2,7 @@ import logging
 from flask import Flask, Response
 from twilio.twiml.voice_response import VoiceResponse
 from services.tts_service import get_tts_service
+from config.settings import SERVER_BASE_URL
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -30,7 +31,7 @@ def test_voice():
         response = VoiceResponse()
         
         # Get server base URL
-        server_base_url = "http://your-server-url"  # Replace with your actual URL
+        server_base_url = SERVER_BASE_URL
         audio_url = f"{server_base_url}/audio/{filename}"
         
         # Play the generated audio

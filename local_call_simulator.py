@@ -5,6 +5,8 @@ from flask import Flask, render_template, request, jsonify
 import json
 import uuid
 import time 
+from config.settings import SERVER_BASE_URL
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

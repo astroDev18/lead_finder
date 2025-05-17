@@ -1,3 +1,4 @@
+# Modified utils/helpers.py to enhance parse_speech_intent function
 import logging
 import re
 
@@ -33,7 +34,7 @@ def sanitize_phone_number(phone_number):
 
 def parse_speech_intent(speech_result):
     """
-    Simple intent parsing based on keywords when Dialogflow is unavailable
+    More comprehensive intent parsing based on keywords (replacement for Dialogflow)
     
     Args:
         speech_result (str): The transcribed speech from the caller
@@ -46,15 +47,33 @@ def parse_speech_intent(speech_result):
     
     speech_lower = speech_result.lower()
     
-    # Check for positive responses
-    positive_keywords = ['yes', 'yeah', 'sure', 'okay', 'interested', 'tell me more', 'send', 'please', 'would like']
-    if any(keyword in speech_lower for keyword in positive_keywords):
-        return 'positive'
+    # Check for positive responses - comprehensive list
+    positive_keywords = [
+        'yes', 'yeah', 'sure', 'okay', 'ok', 'fine', 
+        'interested', 'tell me more', 'send', 'please', 
+        'would like', 'i want', 'i would', 'i do', 'i am', 
+        'of course', 'certainly', 'absolutely', 'definitely',
+        'sounds good', 'that works', 'go ahead'
+    ]
     
-    # Check for negative responses
-    negative_keywords = ['no', 'not', 'don\'t', 'isn\'t', 'wouldn\'t', 'not interested', 'stop', 'bye', 'later']
-    if any(keyword in speech_lower for keyword in negative_keywords):
-        return 'negative'
+    # Check for negative responses - comprehensive list
+    negative_keywords = [
+        'no', 'not', 'don\'t', 'isn\'t', 'wouldn\'t', 
+        'not interested', 'stop', 'bye', 'later',
+        'i don\'t want', 'i don\'t need', 'not now',
+        'go away', 'leave me alone', 'not right now',
+        'no thanks', 'nope', 'pass', 'decline'
+    ]
+    
+    # Check for positive intent
+    for keyword in positive_keywords:
+        if keyword in speech_lower:
+            return 'positive'
+    
+    # Check for negative intent
+    for keyword in negative_keywords:
+        if keyword in speech_lower:
+            return 'negative'
     
     # Default to unclear if no clear intent detected
     return 'unclear'
@@ -64,7 +83,7 @@ def log_call_event(call_sid, event_type, details=None):
     Log call events in a standardized format
     
     Args:
-        call_sid (str): The Twilio call SID
+        call_sid (str): The call SID
         event_type (str): Type of event (e.g., 'initiated', 'speech_received')
         details (dict, optional): Additional details about the event
     """

@@ -1,4 +1,4 @@
-# services/tts_service.py
+# lead_finder/services/tts_service.py
 import os
 import torch
 import logging
@@ -7,21 +7,32 @@ from TTS.api import TTS
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = "C:\\Program Files\\eSpeak NG\\espeak-ng.exe"
+# os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = "C:\\Program Files\\eSpeak NG\\espeak-ng.exe" # This is for Windows, not needed in Linux Docker container
 
-# This fixes the XTTS loading issue
+# --- BEGIN PYTORCH SAFE GLOBALS FIX ---
 try:
+    # Import all specific config classes that XTTS might store in its checkpoint
     from TTS.tts.configs.xtts_config import XttsConfig
-    from TTS.tts.models.xtts import XttsAudioConfig
-    torch.serialization.add_safe_globals([XttsConfig])
-    # Add them all to safe globals
+    from TTS.tts.models.xtts import XttsAudioConfig # You had this
+    from TTS.config.shared_configs import BaseDatasetConfig # <<< ADD THIS ONE AS PER ERROR
+    from TTS.tts.utils.languages import LanguageManager # Often needed by multilingual models
+
+    # Add all potentially problematic classes to safe globals
+    # It's better to be specific if you know them, but a broader list from TTS configs can help
     torch.serialization.add_safe_globals([
         XttsConfig,
-        XttsAudioConfig
+        XttsAudioConfig,
+        BaseDatasetConfig,  # <<< ESSENTIAL
+        LanguageManager,    # <<< GOOD TO HAVE
+        # You might need to add more if other "Unsupported global" errors appear
+        # for other TTS.something classes.
     ])
-    logger.info("Successfully added XTTS configs to safe globals")
+    logger.info("Successfully added necessary TTS configs/classes to PyTorch safe globals.")
+except ImportError as e:
+    logger.error(f"Could not import TTS classes for PyTorch safe globals fix: {e}. XTTS might fail to load.")
 except Exception as e:
-    logger.error(f"Error adding to safe globals: {e}")
+    logger.error(f"Error during PyTorch safe globals setup: {e}")
+# --- END PYTORCH SAFE GLOBALS FIX ---
 
 class TTSService:
     def __init__(self):

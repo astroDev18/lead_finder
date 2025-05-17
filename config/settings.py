@@ -13,7 +13,7 @@ TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
 DIALOGFLOW_PROJECT_ID = os.environ.get('DIALOGFLOW_PROJECT_ID')
 
 # Server settings
-SERVER_BASE_URL = os.environ.get('SERVER_BASE_URL')
+SERVER_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'http://localhost:5001')
 
 # Voice settings
 VOICE_NAME = os.environ.get('VOICE_NAME', 'Polly.Matthew')

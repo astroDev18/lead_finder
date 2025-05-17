@@ -104,6 +104,33 @@ class CampaignManager:
     def get_industry_template(self, industry_id):
         """Get the template for a specific industry"""
         return get_industry_template(industry_id)
+    
+    def get_campaign_by_id(self, campaign_id):
+        """
+        Get a campaign by ID
+        
+        Args:
+            campaign_id (str): ID of the campaign to retrieve
+            
+        Returns:
+            Campaign: Campaign object with script_template attribute
+        """
+        try:
+            # Get the script for this campaign
+            script = self.get_script(campaign_id)
+            
+            # Create a simple class to mimic your database model
+            class Campaign:
+                def __init__(self, id, script):
+                    self.campaign_id = id
+                    self.name = f"Campaign {id}"
+                    self.script_template = script
+            
+            # Return a campaign object with the script template
+            return Campaign(campaign_id, script)
+        except Exception as e:
+            logger.error(f"Error getting campaign by ID {campaign_id}: {e}")
+            return None
 
 def init_campaign_manager():
     """

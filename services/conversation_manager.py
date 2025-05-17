@@ -420,5 +420,198 @@ def test_conversation():
     print(f"\n--- Final conversation state ---")
     print(json.dumps(final_state, indent=2))
 
+
+def start_conversation(self, call_control_id, campaign_id):
+    """
+    Start a new conversation for a call that has been answered
+    
+    Args:
+        call_control_id (str): The Telnyx call control ID
+        campaign_id (str): The campaign ID to use for this conversation
+    """
+    try:
+        logger.info(f"Starting conversation for call {call_control_id} with campaign {campaign_id}")
+        
+        # Get or initialize call state
+        call_state = get_call_state(call_control_id)
+        call_state['campaign_id'] = campaign_id
+        call_state['conversation_stage'] = 'greeting'
+        call_state['start_time'] = datetime.now().isoformat()
+        save_call_state(call_control_id, call_state)
+        
+        # Get the script for this campaign
+        try:
+            # First try from database if db_service available
+            if self.db_service:
+                campaign = self.db_service.get_campaign_by_id(campaign_id)
+                script = campaign.script_template if campaign and campaign.script_template else None
+            else:
+                script = None
+                
+            # Fall back to template if needed
+            if not script:
+                from templates.script_templates import get_script
+                script = get_script(campaign_id)
+                
+        except Exception as e:
+            logger.error(f"Error getting script: {e}")
+            script = None
+            
+        if not script:
+            logger.error(f"No script found for campaign {campaign_id}")
+            return
+            
+        # Get the greeting message
+        if 'conversation_flow' in script:
+            greeting_stage = script.get('conversation_flow', {}).get('greeting', {})
+            greeting_message = greeting_stage.get('message', "Hello, thanks for taking our call.")
+        else:
+            # Legacy format
+            greeting_message = script.get('greeting', "Hello, thanks for taking our call.")
+            
+        # Speak the greeting
+        self._speak_message(call_control_id, greeting_message)
+        
+    except Exception as e:
+        logger.error(f"Error starting conversation: {e}", exc_info=True)
+    
+def end_conversation(self, call_control_id):
+    """
+    End a conversation for a call that has been hung up
+    
+    Args:
+        call_control_id (str): The Telnyx call control ID
+    """
+    try:
+        logger.info(f"Ending conversation for call {call_control_id}")
+        
+        # Update call state
+        call_state = get_call_state(call_control_id)
+        call_state['end_time'] = datetime.now().isoformat()
+        call_state['conversation_stage'] = 'ended'
+        save_call_state(call_control_id, call_state)
+        
+    except Exception as e:
+        logger.error(f"Error ending conversation: {e}", exc_info=True)
+    
+def _speak_message(self, call_control_id, message):
+    """
+    Speak a message to the caller
+    
+    Args:
+        call_control_id (str): The Telnyx call control ID
+        message (str): The message to speak
+    """
+    try:
+        # Generate audio using TTS service
+        from services.tts_service import get_tts_service
+        tts_service = get_tts_service()
+        
+        # Generate the audio file
+        audio_file = tts_service.generate_speech(
+            text=message,
+            voice_id="default"  # Or get from campaign settings
+        )
+        
+        # Play the audio file through the SIP service
+        self._play_audio(call_control_id, audio_file)
+        
+        # Store the message in call state
+        call_state = get_call_state(call_control_id)
+        call_state['messages'] = call_state.get('messages', []) + [{'role': 'assistant', 'content': message}]
+        save_call_state(call_control_id, call_state)
+        
+    except Exception as e:
+        logger.error(f"Error speaking message: {e}", exc_info=True)
+    
+def _play_audio(self, call_control_id, audio_file):
+    """
+    Play an audio file to the caller through the SIP service
+    
+    Args:
+        call_control_id (str): The Telnyx call control ID
+        audio_file (str): Path to the audio file to play
+    """
+    try:
+        # Call the SIP service to play the audio
+        import requests
+        
+        response = requests.post(
+            "http://localhost:5002/play-audio",
+            json={
+                "call_control_id": call_control_id,
+                "audio_file": audio_file
+            }
+        )
+        
+        if response.status_code != 200:
+            logger.error(f"Error playing audio: {response.text}")
+            
+    except Exception as e:
+        logger.error(f"Error playing audio: {e}", exc_info=True)
+
+def handle_speech_input(self, call_control_id, speech_text):
+    """
+    Handle speech input from the caller
+    
+    Args:
+        call_control_id (str): The Telnyx call control ID
+        speech_text (str): The transcribed speech from the caller
+    """
+    try:
+        # Get call state
+        call_state = get_call_state(call_control_id)
+        campaign_id = call_state.get('campaign_id')
+        
+        # Store the user input
+        call_state['messages'] = call_state.get('messages', []) + [{'role': 'user', 'content': speech_text}]
+        save_call_state(call_control_id, call_state)
+        
+        # Process the response
+        result = self.process_response(call_control_id, campaign_id, speech_text)
+        
+        # Speak the response
+        self._speak_message(call_control_id, result['message'])
+        
+        # End call if needed
+        if result.get('end_call'):
+            # Signal to SIP service to end the call
+            self._end_call(call_control_id)
+            
+    except Exception as e:
+        logger.error(f"Error handling speech input: {e}", exc_info=True)
+    
+def _end_call(self, call_control_id):
+    """
+    Signal to the SIP service to end the call
+    
+    Args:
+        call_control_id (str): The Telnyx call control ID
+    """
+    try:
+        import requests
+        
+        response = requests.post(
+            "http://localhost:5002/hangup",
+            json={
+                "call_control_id": call_control_id
+            }
+        )
+        
+        if response.status_code != 200:
+            logger.error(f"Error ending call: {response.text}")
+            
+    except Exception as e:
+        logger.error(f"Error ending call: {e}", exc_info=True)
+
+_conversation_manager = None
+
+def get_conversation_manager(db_service=None):
+    """Get a singleton instance of the ConversationManager"""
+    global _conversation_manager
+    if _conversation_manager is None:
+        _conversation_manager = ConversationManager(db_service)
+    return _conversation_manager
+    
 if __name__ == "__main__":
     test_conversation()
